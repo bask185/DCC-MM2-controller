@@ -17,36 +17,31 @@
 #include "config.h"
 #include "DCC.h"
 #include "Serial.h"
-#include "timers.h"
 #include "Arduino.h"
+#include "src/basics/io.h"
+#include "src/basics/timers.h"
 
 
-
-
-
-
-															 // stateMachine
+// stateMachine
 
 unsigned long millisPrev;
 
-
+#define printDecoder(x) case x: Serial.println(#x); break;
 void getDecoderTypes() {
-  int j;
+	int j;
 	Serial.println("The following trains are listed");
 	for(j=1;j<=80;j++) {
 		train[j].decoderType = EEPROM.read(j); 
 		Serial.println(j);
-		 if(train[j].decoderType < 3) {
-		 	Serial.print("Addres "); Serial1.print(j); Serial.print(" type ");
-		 	switch(train[j].decoderType) {
+		if(train[j].decoderType < 3) {
+			Serial.print("Addres "); Serial1.print(j); Serial.print(" type ");
+			switch(train[j].decoderType) {
 				default: Serial.println("empty");break;
-		 		case MM2:Serial.println("MM2"); break;
-		 		case DCC14:Serial.println("DCC14");break;
-		 		case DCC28: Serial.println("DCC28");break; } } }
+				printDecoder(MM2);
+				printDecoder(DCC14);
+				printDecoder(DCC28); } } }
 	Serial1.println("Decoder types are read in"); }
 
-
-		
 
 /***** ROUND ROBIN TASKS ******/
 void EstopPressed() {
@@ -58,48 +53,41 @@ void shortCircuit() {
 	if(analogRead(currentSensePin) < MAXIMUM_CURRENT) {
 		overloadT = 50; } }
 
-
 /***** INITIALIZATION *****/
 void setup() {
 	Serial1.begin(38400);
 	while(!Serial1);
 	//Serial.begin(115200);
-  //while(!Serial);
-  delay(500);
-	CLEAR_PHONE 
+	//while(!Serial);
 	
 	Serial.println("DCC centrale v1.0");
-	pinMode(power_on,OUTPUT);
-	pinMode(directionPin,OUTPUT);
-	pinMode(directionPin2,OUTPUT);
-	
+
+	delay(500);
+	CLEAR_PHONE 
+
+	for(int i=1;i<=80;i++) train[i].speed = 28;
+	getDecoderTypes();
+
+
+	initIO();
+	digitalWrite(power_on,LOW);
 	digitalWrite(directionPin2, HIGH);
 	digitalWrite(directionPin, LOW);
-  Serial.println("DCC centrale v1.0");
-	mode = 0;
-	for(int i=1;i<=80;i++) train[i].speed = 28;
-  delay(1000);
-	getDecoderTypes();
-  Serial.println("DCC centrale v1.0");
-	digitalWrite(power_on,LOW);
 
-  train[7].decoderType = 2; // delete this
-  train[8].decoderType = 2;
-  train[9].decoderType = 2;
-  
-	initDCC(); }
+	initTimers();
+	initDCC();
+}
 
 /***** MAIN LOOP *****/
 void loop() {
 	readSerialBus();														
 	shortCircuit();
-	updateTimers();
 
 	DCCsignals();
 }
 
 
-void print_binary(byte var) {
-	for (unsigned int test = 0x80; test; test >>= 1) {
-		Serial1.write(var	& test ? '1' : '0'); }
-	Serial1.write(' ');}
+// void print_binary(byte var) {
+// 	for (unsigned int test = 0x80; test; test >>= 1) {
+// 		Serial1.write(var	& test ? '1' : '0'); }
+// 	Serial1.write(' ');}

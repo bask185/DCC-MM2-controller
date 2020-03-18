@@ -1,5 +1,5 @@
 #include "DCC.h"
-#include "config.h"		
+#include "config.h"
 #include <Arduino.h>
 
 enum packetTypes {
@@ -25,8 +25,8 @@ unsigned char packetType = speedPacket, ISR_state = 0, sendPacket_state = 0, Bit
 
 
 /******** STATE FUNCTIONS ********/
-#define State(x) static unsigned char x##F()
-State(assemblePacket) {
+#define stateFunction(x) static unsigned char x##F()
+stateFunction(assemblePacket) {
 	struct Packets {
 		unsigned char addres;
 		unsigned char speed;
@@ -126,11 +126,11 @@ State(assemblePacket) {
 	bitSet(TIMSK1,OCIE1B);																					// send the unsigned char, enable interrupt
 	return true; }
 	
-State(awaitPacketSent) {
+stateFunction(awaitPacketSent) {
 	if(packetSentFlag)	return 1;
 	else 				return 0;}
 	
-State(nextAddres) {
+stateFunction(nextAddres) {
 	unsigned char i;
 	for(i=currentAddres+1; i<=80; i++){
 		if(train[i].decoderType <= 2){;currentAddres=i; return 1;}}
@@ -138,7 +138,7 @@ State(nextAddres) {
 	lastAddresFlag = 1;
 	return 1; }
 	
-State(newPacketSent) {
+stateFunction(newPacketSent) {
 	if(newInstructionFlag<60){ 																				// flag is secretely also used to count
 		/*if(newInstructionFlag % 3 == 0) currentAddres = selectedAddres; *///every 3th cycle a new packet for the new instruction will be send
 		//else	currentAddres = 0;																				// the other cycles will be send with idle packets
@@ -147,18 +147,18 @@ State(newPacketSent) {
 	else newInstructionFlag = false;
 	return 1; }
 	
-State(nextPacketType) {
+stateFunction(nextPacketType) {
 	switch(packetType) {
 		case speedPacket: 		packetType = functionPacket1; break;
 		case functionPacket1:	packetType = functionPacket2; break;
 		case functionPacket2:	packetType = speedPacket; 		break;}
 	return 1; }
-#undef State
 
+// STATE MACHINE
 #define State(x) break; case x: /*Serial1.println(#x);*/ if(x ## F())
 extern void DCCsignals(void) {
 	switch(state){
-		default: /*case IDLE:		*/	
+		default: state = assemblePacket;
 		
 		State(assemblePacket)		state = awaitPacketSent; 
 		
@@ -177,37 +177,38 @@ extern void DCCsignals(void) {
 		State(nextPacketType)		state = assemblePacket; 
 		
 		break; } }
-#undef state
 
 
 /***** INTERRUPT SERVICE ROUTINE *****/		
 ISR(TIMER1_COMPB_vect) {
 	static unsigned char bitMask = 0x80;
+	// if DCC
 	
 	PORTD ^= 0b01000000; // pin 6
 	PORTC ^= 0b10000000; // pin 7
 	
-	if(!ISR_state){																										 // pick a bit and set duration time accordingly		
-		ISR_state++;
+	if(!ISR_state){															// pick a bit and set duration time accordingly		
+		ISR_state = 1;
 
-		if(*ptr & bitMask)	{OCR1A=DCC_ONE_BIT;	/* Serial1.print('1');*/ }														 // '1' 58us
-		else				{OCR1A=DCC_ZERO_BIT; /* Serial1.print('0');*/ }														 // '0' 116us
+		if(*ptr & bitMask)	{OCR1A=DCC_ONE_BIT;	/* Serial1.print('1');*/ }	// '1' 58us
+		else				{OCR1A=DCC_ZERO_BIT; /* Serial1.print('0');*/ }	// '0' 116us
 		
-		if(bitMask == 0x20 && ptr == &transmittBuffer[5]) {									 // last bit?
+		if(bitMask == 0x20 && ptr == &transmittBuffer[5]) {					// last bit?
 			ptr = &transmittBuffer[0];
-			bitClear(TIMSK1,OCIE1B);																				
+			bitClear(TIMSK1,OCIE1B);
 			packetSentFlag = true;} 
 
-		else {																																// if not last bit, shift bit mask, and increment pointer if needed
+		else {																// if not last bit, shift bit mask, and increment pointer if needed
 			bitMask >>= 1;
 			if(!bitMask) {
 				bitMask = 0x80; 
 				ptr++;} } }
-			
+
 	else {
 		ISR_state = 0; } } // toggle pin 8 and 9 for direction*/
 
 void initDCC() {					 // initialize the timer 
+	cli();
 	bitSet(TCCR1A,WGM10);		 
 	bitSet(TCCR1A,WGM11);
 	bitSet(TCCR1B,WGM12);
@@ -220,4 +221,6 @@ void initDCC() {					 // initialize the timer
 	bitClear(TCCR1B,CS11);
 	bitSet(TCCR1B,CS10);
 
-	OCR1A=DCC_ONE_BIT; }// on/off time?
+	OCR1A=DCC_ONE_BIT;
+	cli();
+}// on/off time?

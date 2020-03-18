@@ -1,6 +1,7 @@
 #include "Serial.h"
 #include "dcc.h"
-#include "timers.h"
+#include "src/basics/timers.h"
+#include "src/basics/io.h"
 #include "config.h"
 #include <Arduino.h>
 #include "DCC.h"

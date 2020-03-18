@@ -1,0 +1,4 @@
+12	directionPin2	OUTPUT
+13	directionPin	OUTPUT
+11	power_on	OUTPUT
+A4	currentSensePin	INPUT
