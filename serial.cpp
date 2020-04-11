@@ -31,7 +31,7 @@ enum functionMasks {
 
 enum handControllerCommands {
 	ADDRES = '1',
-	_SPEED = '2',					// 2
+	_SPEED = '2',			// 2
 	HEADLIGHT,				// 3
 	FUNCTION_BANK,			// 4
 	FUNCTION,				// 5
@@ -47,8 +47,8 @@ unsigned char functionBank;
 byte handController = 1;
 
 static void handControllerInstruction(unsigned char _command) {
-	Serial1.print("$$");
-	Serial1.write(_command); }
+	Serial.print("$$");
+	Serial.write(_command); }
 
 static unsigned char makeAddres(unsigned char b) {
 	b -= '0'; 
@@ -57,23 +57,23 @@ static unsigned char makeAddres(unsigned char b) {
 	if(!makeNumberT) selectedAddres = b;			// if timeout occured, new number is formed
 	if(selectedAddres > 127) selectedAddres = b; 	// handles address overflow 
 	if(!handController) {
-		Serial1.print("Selected addres = ");Serial1.println(selectedAddres);
-		Serial1.print("decoder type = "); 
+		Serial.print("Selected addres = ");Serial.println(selectedAddres);
+		Serial.print("decoder type = "); 
 		switch(train[selectedAddres].decoderType) {
-			case MM2: Serial1.println("MM2");break;
-			case DCC14: Serial1.println("DCC14");break;
-			case DCC28: Serial1.println("DCC28");break;
-			default: Serial1.println(train[selectedAddres].decoderType);break;} }
+			case MM2: Serial.println("MM2");break;
+			case DCC14: Serial.println("DCC14");break;
+			case DCC28: Serial.println("DCC28");break;
+			default: Serial.println(train[selectedAddres].decoderType);break;} }
 	else {
 		handControllerInstruction(ADDRES);
-		Serial1.write(selectedAddres); }
+		Serial.write(selectedAddres); }
 	makeNumberT = 200; // after 2 second number starts over
 	return 1; }
 
 
 
 #define serialCommand(x) unsigned char x##F(unsigned char b)
-#define printFunction(x) Serial1.print(#x);Serial1.print(' ');if(train[selectedAddres].functions& x )Serial1.println("ON");else Serial1.println("OFF")
+#define printFunction(x) Serial.print(#x);Serial.print(' ');if(train[selectedAddres].functions& x )Serial.println("ON");else Serial.println("OFF")
 //#define function2handcontroller 
 
 
@@ -89,7 +89,7 @@ serialCommand(handControllerCommand) {
 		if(train[selectedAddres].functions & functionShift) state = '1';
 		else												state = '0';
 		if(handController) {
-			handControllerInstruction(FUNCTION); Serial1.write(pin + '1');Serial1.write(state); }
+			handControllerInstruction(FUNCTION); Serial.write(pin + '1');Serial.write(state); }
 		else switch(functionShift) {
 			case F1: printFunction(F1); break;
 			case F2: printFunction(F2); break;
@@ -107,26 +107,24 @@ serialCommand(handControllerCommand) {
 			case '#': functionBank ^= 0x1; 
 			if(functionBank){ 
 				if(!handController) {
-					Serial1.println("F5-F8"); }
+					Serial.println("F5-F8"); }
 				else {
-          			Serial.println("F5-F8");
-					handControllerInstruction(FUNCTION_BANK); Serial1.write('1'); } }
+					handControllerInstruction(FUNCTION_BANK); Serial.write('1'); } }
 			else {
 				if(!handController) {
-					Serial1.println("F1-F4"); }
+					Serial.println("F1-F4"); }
 				else {
-          			Serial.println("F1-F4");
-					handControllerInstruction(FUNCTION_BANK); Serial1.write('0'); } }	// toggle this 1 bit so we can select F1-F4 and F5-F8
+					handControllerInstruction(FUNCTION_BANK); Serial.write('0'); } }	// toggle this 1 bit so we can select F1-F4 and F5-F8
 			break; 											 
 			case 'P': 
 			digitalWrite(power_on, !digitalRead(power_on));	
 			if(!handController) {													// P
-				if(digitalRead(power_on))	Serial1.println("power ON");
-				else						Serial1.println("power OFF"); }
+				if(digitalRead(power_on))	Serial.println("power ON");
+				else						Serial.println("power OFF"); }
 			else {
 				handControllerInstruction(POWER);
-				if(digitalRead(power_on)) {Serial1.write('1'); Serial.println("pOwer ON");}
-				else					  {Serial1.write('0'); Serial.println("pOwer OFF");} }
+				if(digitalRead(power_on)) {Serial.write('1'); Serial.println("power ON");}
+				else					  {Serial.write('0'); Serial.println("power OFF");} }
 			break;		 
 			case 'S': train[selectedAddres].speed &= 0b11000000;train[selectedAddres].speed|=28; break;											 // S
 			case ':': train[selectedAddres].speed-=3;	break;											 // <<	:
@@ -134,25 +132,23 @@ serialCommand(handControllerCommand) {
 			case '<': train[selectedAddres].speed--;	break;											 // <
 			case '>': train[selectedAddres].speed++;	break;											 // >
 			case '*': train[selectedAddres].headLight ^= 0x1;
-			if(!handController)	Serial1.print("Headlight ");
+			if(!handController)	Serial.print("Headlight ");
 			else {
-				handControllerInstruction(HEADLIGHT); 
-				Serial.print("head light is"); Serial.println(HEADLIGHT); }
+				handControllerInstruction(HEADLIGHT); }
 			if(train[selectedAddres].headLight) {
-				if(!handController) Serial1.println("ON "); else Serial1.write('1'); }
+				if(!handController) Serial.println("ON "); else Serial.write('1'); }
 			else{
-				if(!handController) Serial1.println("OFF"); else Serial1.write('0'); }
+				if(!handController) Serial.println("OFF"); else Serial.write('0'); }
 			break; }	
 		//train[selectedAddres].speed = constrain((train[selectedAddres].speed,0,56);
-		if((train[selectedAddres].speed & 0b00111111) < 28) {train[selectedAddres].speed |=  REVERSE_MASK;Serial1.println("REVERSE");}
-		if((train[selectedAddres].speed & 0b00111111) > 28) {train[selectedAddres].speed &= ~REVERSE_MASK;Serial1.println("FORWARD");}
+		if((train[selectedAddres].speed & 0b00111111) < 28) {train[selectedAddres].speed |=  REVERSE_MASK;Serial.println("REVERSE");}
+		if((train[selectedAddres].speed & 0b00111111) > 28) {train[selectedAddres].speed &= ~REVERSE_MASK;Serial.println("FORWARD");}
 		if(!handController){
-			Serial1.print("Speed = ");Serial1.println((train[selectedAddres].speed)&0b00111111); }
+			Serial.print("Speed = ");Serial.println((train[selectedAddres].speed)&0b00111111); }
 		else {
-			Serial.print("speed = ");Serial.println((train[selectedAddres].speed)&0b00111111);
-			Serial1.print("$$");Serial1.write(_SPEED);Serial1.write((train[selectedAddres].speed)&0b00111111); } }
+			Serial.print("$$");Serial.write(_SPEED);Serial.write((train[selectedAddres].speed)&0b00111111); } }
 	newInstructionFlag = 1;
-	if(train[selectedAddres].speed & ESTOP_MASK) {Serial1.println("E-stop"); }
+	//if(train[selectedAddres].speed & ESTOP_MASK) {Serial.println("E-stop"); }
 	return 1; }
 
 serialCommand(setDecoderType){	
@@ -164,45 +160,45 @@ serialCommand(setDecoderType){
 		case DCC28: train[selectedAddres].decoderType = DCC28; break;
 		default:	train[selectedAddres].decoderType = EMPTY_SLOT; break; }
 		
-	Serial.println("setting decoder"); Serial.println(b);
-	Serial.print("selected address = ");Serial.println(selectedAddres);
+	//Serial.println("setting decoder"); Serial.println(b);
+	//Serial.print("selected address = ");Serial.println(selectedAddres);
 	EEPROM.write(selectedAddres, b);														// store in EEPROM
 	if(b != EMPTY_SLOT) {
-		/*if(!handController)*/ Serial.print("decoder selected: ");
+		if(!handController) Serial.print("decoder selected: ");
 		switch(b) {
 
 			case MM2:	
-			/*if(!handController)*/ Serial.print("MM2 2");
-			/*else*/ handControllerInstruction(DECODER_SELECTED); Serial1.write(b);
+			if(!handController) Serial.print("MM2 2");
+			else handControllerInstruction(DECODER_SELECTED); Serial.write(b);
 			break;
 
 			case DCC14: 
-			/*if(!handController)*/Serial.print("DCC 14 speed steps");
-			/*else*/ handControllerInstruction(DECODER_SELECTED); Serial1.write(b);
+			if(!handController) Serial.print("DCC 14 speed steps");
+			else handControllerInstruction(DECODER_SELECTED); Serial.write(b);
 			break;
 
 			case DCC28: 
-			/*if(!handController)*/ Serial.print("DCC 28 speed steps");
-			/*else*/ handControllerInstruction(DECODER_SELECTED); Serial1.write(b);
+			if(!handController) Serial.print("DCC 28 speed steps");
+			else handControllerInstruction(DECODER_SELECTED); Serial.write(b);
 			break; } }
 	else {
 		train[selectedAddres].speed = 0;
 		train[selectedAddres].functions = 0;
 		train[selectedAddres].headLight = 0;
-		Serial1.print("Train ");Serial.print(selectedAddres);Serial.println(" deleted!");
-		handControllerInstruction(TRAIN_DELETED); Serial1.write(selectedAddres); } 
+		if(!handController) Serial.print("Train ");Serial.print(selectedAddres);Serial.println(" deleted!");
+		handControllerInstruction(TRAIN_DELETED); Serial.write(selectedAddres); } 
 	return 1; }
 
 serialCommand(setSpeed) {
 	b = constrain(b,0,56);
 	train[selectedAddres].speed = b;
-	Serial.print("setting speed @ "); Serial.println(b);
+	if(!handController) Serial.print("setting speed @ "); Serial.println(b);
 	train[selectedAddres].speed = constrain(train[selectedAddres].speed,0,56);// should be redundant
-	handControllerInstruction(_SPEED); Serial1.write(b);
+	handControllerInstruction(_SPEED); Serial.write(b);
 	return 1;}
 
 serialCommand(login) {
-  Serial.println("HAND CONTROLLER CONNECTED!");
+    Serial.println("HAND CONTROLLER CONNECTED!");
 	handController = 1;
 	return 1; }
 	
@@ -210,7 +206,7 @@ serialCommand(login) {
 
 unsigned char setAddres(unsigned char b) {				// OBSOLETE
 	selectedAddres = constrain(b,1,80);
-	Serial1.print("selected addres = ");Serial1.println(selectedAddres);
+	if(!handController)Serial.print("selected addres = ");Serial.println(selectedAddres);
 	return 1;}
 
 unsigned char setFunctions(unsigned char b) {
@@ -226,10 +222,10 @@ unsigned char setTrain(signed char b) {											// THIS FUNCTION HAS BECOME OB
 		case 2: if(b&1) train[selectedAddres].headLight |= 1;	break;	 
 		case 3:
 		train[selectedAddres].functions = b; 
-		Serial1.print("selected addres: ");Serial1.println(selectedAddres);
-		Serial1.print("speed of train is set at: ");Serial1.println(train[selectedAddres].speed);
-		Serial1.print("headlight is turned: ");if(train[selectedAddres].headLight)Serial1.println("ON");else Serial1.println("OFF");
-		Serial1.print("funcion F1 - F8 ");Serial1.println((unsigned char)train[selectedAddres].functions, BIN);
+		Serial.print("selected addres: ");Serial.println(selectedAddres);
+		Serial.print("speed of train is set at: ");Serial.println(train[selectedAddres].speed);
+		Serial.print("headlight is turned: ");if(train[selectedAddres].headLight)Serial.println("ON");else Serial.println("OFF");
+		Serial.print("funcion F1 - F8 ");Serial.println((unsigned char)train[selectedAddres].functions, BIN);
 		newInstructionFlag = true;
 		mode = IDLE;
 		return 1;
@@ -241,18 +237,19 @@ unsigned char setTrain(signed char b) {											// THIS FUNCTION HAS BECOME OB
 /***** SERIAL PROCESSING *****/
 #define serialCommand(x) case x: if(x##F(b)) mode = IDLE; break;
 void readSerialBus() {
-	if(Serial1.available()) {
-		signed char b = Serial1.read();
+	if(Serial.available()) {
+		signed char b = Serial.read();
 		Serial.println((char)b);
+		PORTB ^= ( 1 << 5 );
 
 		switch(mode) {										// the first unsigned char contains the instruction, the following unsigned chars are for that specific instrunction. When an instruction is processed it returns 1 
 			case IDLE:											// and set mode back at IDLE for a new instruction. caseSelector is used for more than 1 follow-up unsigned chars. Could use a new name though
 			caseSelector = 0;	
-			CLEAR_PHONE
+			//CLEAR_PHONE
 				 if(b >= '0' && b <= '9') makeAddres(b);	 
 			else if(b >= 'a' && b <= 'f') mode = b;	 
 			else {
-				Serial1.print("INVALID COMMAND ");Serial1.println(b); }
+				Serial.print("INVALID COMMAND ");Serial.println(b); }
 			break;
 
 			serialCommand(handControllerCommand); // 'a'

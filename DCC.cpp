@@ -155,7 +155,7 @@ stateFunction(nextPacketType) {
 	return 1; }
 
 // STATE MACHINE
-#define State(x) break; case x: /*Serial1.println(#x);*/ if(x ## F())
+#define State(x) break; case x: /*Serial.println(#x);*/ if(x ## F())
 extern void DCCsignals(void) {
 	switch(state){
 		default: state = assemblePacket;
@@ -184,14 +184,13 @@ ISR(TIMER1_COMPB_vect) {
 	static unsigned char bitMask = 0x80;
 	// if DCC
 	
-	PORTD ^= 0b01000000; // pin 6
-	PORTC ^= 0b10000000; // pin 7
+	PORTD ^= 0b00011000; // pin 3 and 4 needs to be toggled
 	
 	if(!ISR_state){															// pick a bit and set duration time accordingly		
 		ISR_state = 1;
 
-		if(*ptr & bitMask)	{OCR1A=DCC_ONE_BIT;	/* Serial1.print('1');*/ }	// '1' 58us
-		else				{OCR1A=DCC_ZERO_BIT; /* Serial1.print('0');*/ }	// '0' 116us
+		if(*ptr & bitMask)	{OCR1A=DCC_ONE_BIT;	/* Serial.print('1');*/ }	// '1' 58us
+		else				{OCR1A=DCC_ZERO_BIT; /* Serial.print('0');*/ }	// '0' 116us
 		
 		if(bitMask == 0x20 && ptr == &transmittBuffer[5]) {					// last bit?
 			ptr = &transmittBuffer[0];
