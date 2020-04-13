@@ -1,3 +1,4 @@
+#include <Arduino.h>
 extern unsigned char mode;
 
 extern void readSerialBus();

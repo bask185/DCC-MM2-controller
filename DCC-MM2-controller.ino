@@ -35,26 +35,34 @@ void getDecoderTypes() {
 				default: Serial.println("empty");break;
 				printDecoder(MM2);
 				printDecoder(DCC14);
-				printDecoder(DCC28); }*/ } } }
+				printDecoder(DCC28); }*/ } }
+	
+	train[8].decoderType = DCC28; 
+	train[8].speed = 40;
+	train[8].headLight = 1;
+	}
 
 /***** ROUND ROBIN TASKS ******/
 void EstopPressed() {
-	digitalWrite(power_on, LOW);
+	//digitalWrite(power_on, LOW);
+	Serial.print("$$80");
 	/*Serial.println("E-stop pressed");*/ } 
 
 void shortCircuit() {
-	if(!overloadT) EstopPressed();
 	if(analogRead(currentSensePin) < MAXIMUM_CURRENT) {
-		overloadT = 50; } }
+		overloadT = 50; }
+	if(!overloadT) EstopPressed();
+}
 
 /***** INITIALIZATION *****/
 void setup() {
-	Serial.begin(9600);
+	Serial.begin(115200);
+	//timeOutT = 255;
 	//while(!Serial);
 	//Serial.begin(115200);
 	//while(!Serial);
 	
-	Serial.println("DCC centrale v1.0");
+	//Serial.println("DCC centrale v1.0");
 
 	delay(500);
 	// CLEAR_PHONE 
@@ -62,32 +70,25 @@ void setup() {
 	for(int i=1;i<=80;i++) train[i].speed = 28;
 	getDecoderTypes();
 
-
 	initIO();
-	digitalWrite(power_on,LOW);
+	digitalWrite(power_on,LOW); // must be low
 	digitalWrite(directionPin2, HIGH);
 	digitalWrite(directionPin, LOW);
 
 	initTimers();
-	//initDCC();
+	initDCC();
+	//Serial.print("%%"); // starts debug mode
 }
 
 /***** MAIN LOOP *****/
 void loop() {
 
-	blink13();
 	readSerialBus();														
 	shortCircuit();
 
-	//DCCsignals();
+	DCCsignals();
 }
 
-void blink13() {
-	if(!blinkT) {
-		blinkT = 10;
-		PORTB ^= (1 << 5) ;
-	}
-}
 
 // void print_binary(byte var) {
 // 	for (unsigned int test = 0x80; test; test >>= 1) {

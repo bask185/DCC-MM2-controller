@@ -1,6 +1,10 @@
 #ifndef DCC_H
 #define DCC_H
 
+#include <Arduino.h>
+
+extern byte debug;
+
 enum decoderTypes {
 	MM2,
 	DCC14,

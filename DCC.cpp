@@ -1,6 +1,5 @@
 #include "DCC.h"
 #include "config.h"
-#include <Arduino.h>
 
 enum packetTypes {
 	speedPacket = 1,
@@ -15,18 +14,26 @@ enum states {
 	newPacketSent,
 	nextPacketType };
 
-
+byte debug = 0;
+void startDebug() 			 { if(debug) Serial.println("%%start log"); }
+#define printDebug(x)  		   if(debug) Serial.print(x)
+#define printDebugln(x)	       if(debug) {Serial.println(x); }
+#define printBinln(x)	       if(debug) {Serial.println(x, BIN); }
+void endDebug()				 { if(debug) Serial.write(0x80); }
 
 unsigned char newInstructionFlag, packetSentFlag, lastAddresFlag, newPacketSentFlag, state = assemblePacket;
 
 unsigned char transmittBuffer[8]; 
-unsigned char *ptr;																																												// make pointer to point at the transmittBuffer																																							// F1-F4 / F5-F8																																 // for processing of serial data
+unsigned char *ptr;	
 unsigned char packetType = speedPacket, ISR_state = 0, sendPacket_state = 0, Bit;	// for DCC packets
 
 
 /******** STATE FUNCTIONS ********/
 #define stateFunction(x) static unsigned char x##F()
 stateFunction(assemblePacket) {
+
+	startDebug();
+
 	struct Packets {
 		unsigned char addres;
 		unsigned char speed;
@@ -37,7 +44,10 @@ stateFunction(assemblePacket) {
 	if(currentAddres) {
 	/******	ADDRES	*******/ 
 		Packet.addres = currentAddres;
-		
+		printDebug("current addres "); printDebugln(currentAddres);
+		printDebug("packet type    "); printDebugln(packetType);
+		printDebugln("1 = speed, 2 = function pack 1, 3 = function pack 2");
+
 		switch(packetType){																		// there are 3 types of packets, speed, F1-F4 + HL and F5-F8
 			signed char speed_tmp;																// make local variable for speed to calculate with
 		
@@ -88,6 +98,8 @@ stateFunction(assemblePacket) {
 			Packet.functions2 |= (train[currentAddres].functions >> 4);							// F5 - F8
 			transmittBuffer[3] = Packet.functions2;
 			break; }
+
+		
 			
 			/******	FUNCTIONS F9 - F12	*******/
 			/*case functionPacket3:																										 // NOTE future usage?
@@ -105,15 +117,15 @@ stateFunction(assemblePacket) {
 		transmittBuffer[2] = Packet.addres << 1;												// addres unsigned char, 0 bit
 		//transmittBuffer[3] is filled above
 		transmittBuffer[4] = Packet.checksum >> 1;												// 0 bit, 7 bits of checksum
-		transmittBuffer[5] = Packet.checksum << 7 | 1<<6; }
-	
+		transmittBuffer[5] = Packet.checksum << 7 | 1<<6; }	
 //		11111111111111 0 11111111 0 00000000 0 11111111 1	<- IDLE PACKET
 //
 //		 0			 1			2			3			 4			5	
 //	11111111	111111_0_1	 1111111_0	 00000000	 0_1111111 	11000000
 //		0xFF	 0xFD		 0xFE		0x00			0x7F	0xC0
 	
-	else {																													// if current addres = 0,	
+	else {																								// if current addres = 0,	
+		printDebugln("idle packet");
 		transmittBuffer[0] = 0xFF;																		// we overwrite the buffers to 
 		transmittBuffer[1] = 0xFD;																		// assemble an IDLE packet
 		transmittBuffer[2] = 0xFE;																		
@@ -124,6 +136,14 @@ stateFunction(assemblePacket) {
 	ptr = &transmittBuffer[0];																			// point ptr at first unsigned char
 	packetSentFlag = false;																				 // clear flag
 	bitSet(TIMSK1,OCIE1B);																					// send the unsigned char, enable interrupt
+
+
+	printDebug("address  "); printDebugln(Packet.addres);
+	printDebug("speed    "); printDebugln(transmittBuffer[3]);
+	printDebug("checksum "); printDebugln(Packet.checksum);
+
+	endDebug();
+
 	return true; }
 	
 stateFunction(awaitPacketSent) {
@@ -139,9 +159,8 @@ stateFunction(nextAddres) {
 	return 1; }
 	
 stateFunction(newPacketSent) {
-	if(newInstructionFlag<60){ 																				// flag is secretely also used to count
-		/*if(newInstructionFlag % 3 == 0) currentAddres = selectedAddres; *///every 3th cycle a new packet for the new instruction will be send
-		//else	currentAddres = 0;																				// the other cycles will be send with idle packets
+	if(newInstructionFlag<60){ 	
+		/*Serial.println("new pack send");*/																			// flag is secretely also used to count
 		newInstructionFlag++;}
 		
 	else newInstructionFlag = false;
@@ -154,27 +173,34 @@ stateFunction(nextPacketType) {
 		case functionPacket2:	packetType = speedPacket; 		break;}
 	return 1; }
 
+byte runOnce;
+static void nextState(byte newState)	{
+	runOnce = 1;
+	state = newState;
+
+}
+
 // STATE MACHINE
-#define State(x) break; case x: /*Serial.println(#x);*/ if(x ## F())
+#define State(x) break; case x: /*if(runOnce){Serial.println("%%"#x);Serial.write(0x80);runOnce=0;}*/if(x ## F())
 extern void DCCsignals(void) {
 	switch(state){
 		default: state = assemblePacket;
 		
-		State(assemblePacket)		state = awaitPacketSent; 
+		State(assemblePacket)		nextState(awaitPacketSent ); 
 		
 		State(awaitPacketSent){	
-			if(newInstructionFlag)	state = newPacketSent;
-			else					state = nextAddres; }
+			if(newInstructionFlag)	nextState(newPacketSent);
+			else					nextState(nextAddres); }
 		
 		State(nextAddres){
-			if(lastAddresFlag)		state = nextPacketType;
-			else					state = assemblePacket; }
+			if(lastAddresFlag)		nextState( nextPacketType );
+			else					nextState( assemblePacket ); }
 		
 		State(newPacketSent){
-			if(newPacketSentFlag)	state = assemblePacket;
-			else					state = nextPacketType; }
+			if(newPacketSentFlag)	nextState( assemblePacket );
+			else					nextState( nextPacketType ); }
 		
-		State(nextPacketType)		state = assemblePacket; 
+		State(nextPacketType)		nextState( assemblePacket ); 
 		
 		break; } }
 
@@ -182,16 +208,23 @@ extern void DCCsignals(void) {
 /***** INTERRUPT SERVICE ROUTINE *****/		
 ISR(TIMER1_COMPB_vect) {
 	static unsigned char bitMask = 0x80;
+
+	//static unsigned int counter = 0xffff;
 	// if DCC
-	
+	//counter++;
+	//if(!counter) PORTB ^= (1 << 5);
+
 	PORTD ^= 0b00011000; // pin 3 and 4 needs to be toggled
 	
 	if(!ISR_state){															// pick a bit and set duration time accordingly		
 		ISR_state = 1;
 
-		if(*ptr & bitMask)	{OCR1A=DCC_ONE_BIT;	/* Serial.print('1');*/ }	// '1' 58us
-		else				{OCR1A=DCC_ZERO_BIT; /* Serial.print('0');*/ }	// '0' 116us
-		
+		cli();
+		if(*ptr & bitMask) { OCR1A=DCC_ONE_BIT;	/* Serial.print('1');*/  }	// '1' 58us
+		else			   { OCR1A=DCC_ZERO_BIT; /* Serial.print('0');*/ }	// '0' 116us
+		sei();
+		//OCR1A=DCC_ZERO_BIT;
+
 		if(bitMask == 0x20 && ptr == &transmittBuffer[5]) {					// last bit?
 			ptr = &transmittBuffer[0];
 			bitClear(TIMSK1,OCIE1B);
@@ -220,6 +253,6 @@ void initDCC() {					 // initialize the timer
 	bitClear(TCCR1B,CS11);
 	bitSet(TCCR1B,CS10);
 
-	OCR1A=DCC_ONE_BIT;
-	cli();
+	OCR1A = DCC_ONE_BIT;
+	sei();
 }// on/off time?
