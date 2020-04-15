@@ -25,47 +25,57 @@
 #define printDecoder(x) case x: Serial.println(#x); break;
 void getDecoderTypes() {
 	int j;
-	//Serial.println("The following trains are listed");
-	for(j=1;j<=80;j++) {
+	for( j=1 ; j<=80 ; j++ ) {
 		train[j].decoderType = EEPROM.read(j); 
-		//Serial.println(j);
-		if(train[j].decoderType < 3) {
-			//Serial.print("Addres "); Serial.print(j); Serial.print(" type ");
-			/*switch(train[j].decoderType) {
-				default: Serial.println("empty");break;
-				printDecoder(MM2);
-				printDecoder(DCC14);
-				printDecoder(DCC28); }*/ } }
-	
-	train[8].decoderType = DCC28; 
-	train[8].speed = 40;
-	train[8].headLight = 1;
 	}
+		// if(train[j].decoderType < 3) {
+		// 	Serial.print("Addres "); Serial.print(j); Serial.print(" type ");
+		// 	switch(train[j].decoderType) {
+		// 		default: Serial.println("empty");break;
+		// 		printDecoder(MM2);
+		// 		printDecoder(DCC14);
+		// 		printDecoder(DCC28); } } }
+	Serial.write(0x82);
+	train[3].decoderType = DCC28;
+	train[5].decoderType = DCC28;
+	train[6].decoderType = DCC28;
+	train[7].decoderType = DCC28;
+	train[8].decoderType = DCC28;
+}
 
 /***** ROUND ROBIN TASKS ******/
 void EstopPressed() {
-	//digitalWrite(power_on, LOW);
+	digitalWrite(power_on, LOW);
 	Serial.print("$$80");
-	/*Serial.println("E-stop pressed");*/ } 
+	Serial.println("E-stop pressed"); } 
 
+#define MAXIMUM_CURRENT 160
 void shortCircuit() {
-	if(analogRead(currentSensePin) < MAXIMUM_CURRENT) {
-		overloadT = 50; }
-	if(!overloadT) EstopPressed();
+	static byte msCounter = 0;
+	static unsigned int prev;
+
+	if(!overloadT) {
+		overloadT = 10;
+	
+
+		unsigned int sample = analogRead(currentSensePin);
+		if(sample < MAXIMUM_CURRENT) {
+			msCounter = 5;
+		}/*
+		if(sample != prev) {
+			prev = sample;
+			Serial.println(sample);
+		}*/
+		
+		if(msCounter) msCounter--;
+		if(!msCounter) EstopPressed();
+	}
 }
 
 /***** INITIALIZATION *****/
 void setup() {
 	Serial.begin(115200);
-	//timeOutT = 255;
-	//while(!Serial);
-	//Serial.begin(115200);
-	//while(!Serial);
-	
-	//Serial.println("DCC centrale v1.0");
-
-	delay(500);
-	// CLEAR_PHONE 
+	Serial.println("hello Bas");
 
 	for(int i=1;i<=80;i++) train[i].speed = 28;
 	getDecoderTypes();
@@ -77,20 +87,19 @@ void setup() {
 
 	initTimers();
 	initDCC();
-	//Serial.print("%%"); // starts debug mode
+	connectT = 10;
 }
 
 /***** MAIN LOOP *****/
 void loop() {
+	connect();
 
-	readSerialBus();														
+	readSerialBus();
+
 	shortCircuit();
 
 	DCCsignals();
 }
 
 
-// void print_binary(byte var) {
-// 	for (unsigned int test = 0x80; test; test >>= 1) {
-// 		Serial.write(var	& test ? '1' : '0'); }
-// 	Serial.write(' ');}
+

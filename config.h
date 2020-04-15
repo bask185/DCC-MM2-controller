@@ -6,4 +6,3 @@ typedef struct trains_ {
 } Trains;
 extern Trains train[81]; 
 
-extern unsigned char currentAddres;

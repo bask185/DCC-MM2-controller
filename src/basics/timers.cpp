@@ -18,7 +18,7 @@ extern void initTimers() {
 volatile unsigned char overloadT;
 volatile unsigned char makeNumberT;
 volatile unsigned char handShakeT;
-volatile unsigned char blinkT;
+volatile unsigned char blinkT, connectT;
 
 // Don't complain about the indentations. This code is generated for you and you shouldn't be looking at this part.
 ISR(TIMER2_COMPA_vect) {
@@ -33,14 +33,14 @@ _1ms += 1;
 
 
 // 10ms timers
-if(!(_1ms % 10)) { _1ms = 0; _10ms += 1;
+if(_1ms == 10) { _1ms = 0; _10ms += 1;
 
 	if(makeNumberT) makeNumberT--;
 
 
 
 // 100ms timers
-if(!(_10ms % 10)) { _10ms = 0; _100ms += 1;
+if(_10ms == 10) { _10ms = 0; _100ms += 1;
 
 	if(handShakeT) handShakeT--;
 	if(blinkT) blinkT--;
@@ -49,7 +49,9 @@ if(!(_10ms % 10)) { _10ms = 0; _100ms += 1;
 
 
 //1000ms timers
-if(!(_100ms % 10)) { _100ms = 0;
+if(_100ms == 10 ) { _100ms = 0;
+
+	if(connectT) connectT--;
 
 
 

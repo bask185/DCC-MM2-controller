@@ -1,9 +1,10 @@
-#ifndef DCC_H
-#define DCC_H
-
 #include <Arduino.h>
 
-extern byte debug;
+enum packetTypes {
+	speedPacket = 1,
+	functionPacket1,
+	functionPacket2,
+	functionPacket3 };
 
 enum decoderTypes {
 	MM2,
@@ -12,10 +13,14 @@ enum decoderTypes {
 	SELECTRIX,
 	EMPTY_SLOT = 255};
 
+extern byte debug;
+extern unsigned char packetType, newInstructionFlag;
+extern int selectedAddres, currentAddres;
+
 /***** CONSTANTS *****/
 #define DCC_ZERO_BIT 1855
 #define DCC_ONE_BIT 927
-#define MAXIMUM_CURRENT 160
+
 #define CLEAR_SPEED 0b11100000
 
 #define ESTOP 30
@@ -32,6 +37,3 @@ enum trainCommands {
 	FUNCTIONS2		= 0B1011 << 4,
 	FUNCTIONS3		= 0B1010 << 4 };	 // F9-12 not yet in use, just added this for future purposes
 
-extern unsigned char newInstructionFlag;
-
-#endif
