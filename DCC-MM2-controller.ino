@@ -10,7 +10,6 @@
 	*	when it is empty no DCC/MM2 packages for that addres will be outputted
 	*/
 
-
 #define true 1
 #define false 0
 //#include <EEPROM.h>
@@ -54,9 +53,6 @@ void shortCircuit() {
 
 /***** INITIALIZATION *****/
 void setup() {
-	Serial.begin(115200);
-	Serial.println("DCC CENTRAL V1.0");
-
 
 	initIO();
 	digitalWrite(power_on,LOW); // must be low
@@ -66,15 +62,26 @@ void setup() {
 	initTimers();
 	initDCC();
 	connectT = 10;
+
+	
+
+	Serial.begin(115200);
+	Serial.println("DCC CENTRAL V1.0");
+
+	
 }
 
 /***** MAIN LOOP *****/
 void loop() {
-	connect();
+	if( !blinkT ) {
+		blinkT = 10;
+		PORTB ^= (1<<5);
+	}
+	//connect();
 
 	readSerialBus();
 
-	shortCircuit();
+	// shortCircuit();
 
 	DCCsignals();
 }

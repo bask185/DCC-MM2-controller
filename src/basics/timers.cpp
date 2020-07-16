@@ -2,6 +2,7 @@
 #include "timers.h"
 
 extern void initTimers() {
+	cli();
 	TCCR2B = 0;// same for TCCR2B
 	TCNT2  = 0;//initialize counter value to 0
 	// set compare match register for 8khz increments
@@ -13,7 +14,9 @@ extern void initTimers() {
 	TCCR2B |= (1 << CS21); 
 	TCCR2B &= ~(1 << CS22); 
 	// enable timer compare interrupt
-	TIMSK2 |= (1 << OCIE2A); }
+	TIMSK2 |= (1 << OCIE2A); 
+	sei();
+}
 
 volatile unsigned char overloadT;
 volatile unsigned char makeNumberT;
@@ -33,15 +36,14 @@ _1ms += 1;
 
 
 // 10ms timers
-if(!(_1ms % 10)) { _1ms = 0; _10ms += 1;
+if(_1ms == 10) { _1ms = 0; _10ms += 1;
 
 	if(makeNumberT) makeNumberT--;
-	if(connectT) connectT--;
 
 
 
 // 100ms timers
-if(!(_10ms % 10)) { _10ms = 0; _100ms += 1;
+if(_10ms == 10) { _10ms = 0; _100ms += 1;
 
 	if(handShakeT) handShakeT--;
 	if(blinkT) blinkT--;
@@ -49,8 +51,9 @@ if(!(_10ms % 10)) { _10ms = 0; _100ms += 1;
 
 
 //1000ms timers
-if(!(_100ms % 10)) { _100ms = 0;
+if(_100ms == 10) { _100ms = 0;
 
+	if(connectT) connectT--;
 
 
 

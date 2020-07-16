@@ -2,4 +2,4 @@ overloadT	1
 makeNumberT	10
 handShakeT	100
 blinkT	100
-connectT	10
+connectT	1000

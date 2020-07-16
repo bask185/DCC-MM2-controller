@@ -61,11 +61,20 @@ controlling other unintended functions.
 
 */
 
+// HEADER FILES
 #include "DCC.h"
 #include <EEPROM.h>
 
-#define nTrains 100
+#include "src/basics/io.h" 
 
+// CONSTANTS
+
+const int DCC_ZERO_BIT =  1855; // 116us
+const int DCC_ONE_BIT =  927;   // 58us
+const int MAXIMUM_CURRENT =  169; // <- true for 0.33R shunt resistor for track current for 2.5 ampere.
+const int CLEAR_SPEED =  0b11100000;
+const int bufferSize  = 64;
+const int repeatAmount =  20;
 
 enum states {
 	selectNewPacketType ,
@@ -87,19 +96,17 @@ void startDebug() 			 { if(debug) Serial.println("%%start log"); }
 #define printBinln(x)	       if(debug) {Serial.println(x, BIN); }
 void endDebug()				 { if(debug) Serial.write(0x80); }
 
-
-#define bufferSize 64
-// variables
-Train train[nTrains]; 
+// VARIABLES
+Train train[ nTrains ] ; // 100 train objects are created here
 
 struct {
-	uint8_t In;
+	uint8_t In;							// In and Out counter are used to for FIFO buffer
 	uint8_t Out;
-	uint8_t newCommands[bufferSize];  // FIFO buffer used to store new commands
-	uint8_t toFill : 1;
-	uint8_t toSend : 1;
+	uint8_t newCommands[bufferSize];	// FIFO buffer used to store new commands
+	uint8_t toFill : 1;					// one array may be filled...
+	uint8_t toSend : 1;					// ... while the other one is clocked on tracks
 	uint8_t array[2][8];
-	uint8_t byteCount;
+	uint8_t byteCount;					// these variable keeps track of ammount of bytes in FIFO buffer
 } buffer;
 
 uint8_t *ptr;
@@ -128,19 +135,23 @@ uint8_t checkAddress( uint8_t _address ) {
 	return false;
 }
 
-void scoopInBuffer(uint8_t _address, uint8_t _instruction, uint8_t _data) {
+void dumpData()
+{
+}
+
+void scoopInBuffer(uint8_t _address, uint8_t _instruction ) {
 	if( !checkAddress ) return; // if address does not exist, disregard the instruction
 
 	buffer.newCommands[ buffer.In ++ ] = _address;
 	buffer.newCommands[ buffer.In ++ ] = _instruction;
-	buffer.newCommands[ buffer.In ++ ] = _data;
 
-	buffer.byteCount += 3;
-	if( buffer.bytCount >= bufferSize ) {
+	buffer.byteCount += 2;
+	Serial.print( "buffer in < "); Serial.println(buffer.byteCount);
+	if( buffer.byteCount >= bufferSize ) {
 		Serial.println("INSTRUCTION BUFFER HAS OVERFLOWED, YOU MORRON!!! (don't be offened, it's a joke)");
 		Serial.println("CATASTROPHIC SYSTEM FAILURE, PROGRAM HAS TERMINATED"); 
 		Serial.println("you sent too many bytes into the FIFO buffer, correct this");
-		digitalWrite( trackPower, LOW );
+		digitalWrite( power_on, LOW );
 		cli();
 		while ( 1 ) ;
 	}
@@ -151,59 +162,87 @@ void scoopOutBuffer(uint8_t *_address, uint8_t *_instruction) {
 
 	*_address	   = buffer.newCommands[ buffer.Out ++ ];
 	*_instruction  = buffer.newCommands[ buffer.Out ++ ];
-	_data		   = buffer.newCommands[ buffer.Out ++ ];
 
-	buffer.byteCount -= 3;
+	buffer.byteCount -= 2;
+	Serial.print( "buffer out > "); Serial.println(buffer.byteCount);
 
 	uint8_t _state = *_instruction;
 	switch( _state ) {
-		case speedInstruction:		packetType = speedPacket; 		train[ *_address ].speed      =  _data; break;
-		case setF1F4:				packetType = functionPacket1; 	train[ *_address ].functions |=  _data; break;
-		case clrF1F4:				packetType = functionPacket1; 	train[ *_address ].functions &= ~_data; break;
-		case setF5F8:				packetType = functionPacket2; 	train[ *_address ].functions |=  _data; break;
-		case clrF5F8:				packetType = functionPacket2; 	train[ *_address ].functions &= ~_data; break;
-		case headlightInstruction:	packetType = functionPacket1;	train[ *_address ].headLight  =  _data; break;
+		case speedInstruction:		packetType = speedPacket; 	  break;
+		case setF1F4:				packetType = functionPacket1; break;
+		case clrF1F4:				packetType = functionPacket1; break;
+		case setF5F8:				packetType = functionPacket2; break;
+		case clrF5F8:				packetType = functionPacket2; break;
+		case headlightInstruction:	packetType = functionPacket1; break;
 	}
 
-	Serial.print("train ");Serial.print( _address );Serial.print("'s speed = ");Serial.println( train[ *_address ].speed  ); // new instructions are printed after they are processed
-	Serial.print("functions ");Serial.println( train[ *_address ].functions );
-	Serial.print("headlight ");Serial.println( train[ *_address ].headLight );
+	//uint8_t data = 
+	Serial.print("train ");Serial.println( *_address );Serial.print("speed = ");Serial.println( train[ *_address ].speed  ); // new instructions are printed after they are processed
+	Serial.print("functions ");Serial.println( (uint8_t)train[ *_address ].functions );
+	Serial.print("headlight ");Serial.println( (uint8_t)train[ *_address ].headLight );
 
 	newInstructionFlag = true;
 }
 
+// CONTROL FUNCTIONS TO CONTROLL DCC CENTRAL WITH
 Train getTrain( uint8_t _address ) {
 	return train[ _address ] ;
 }
 
 void setSpeed( uint8_t _address, uint8_t _speed) {
+	train[ _address ].speed = _speed;
 	scoopInBuffer( _address, speedInstruction, _speed) ;
 }
 
+void Estop() {
+	
+}
+
+void stop() {
+}
+
 void setHeadlight( uint8_t _address, uint8_t on_off) {
+	train[ _address ].headLight = on_off;
 	scoopInBuffer(_address ,headlightInstruction, on_off );
 }
 
 void setFunctions( uint8_t _address, uint8_t _functions) {
 	uint8_t ON, instruction, bitCounter = 0;
 
+
+
 	for( uint8_t j = 0 ; j < 8 ; j ++ ) {
 		if( _functions & ( 1 << j ) ) bitCounter++;
+		if( bitCounter > 1) break;
 	}
 
 	if( bitCounter > 1 ) { // more than 1 bit -> clear function
-		if( _functions & 0x0F ) instruction = clrF1F4;
-		else					instruction = clrF5F8;
+		if( _functions & 0x0F ) { instruction = clrF1F4; Serial.println(" clrF1F4"); }
+		else					{ instruction = clrF5F8; Serial.println(" clrF5F8"); }
 	}
 	else {
-		if( _functions & 0x0F )	instruction = setF1F4;
-		else					instruction = setF5F8;
+		if( _functions & 0x0F )	{ instruction = setF1F4; Serial.println("setF1F4"); }
+		else					{ instruction = setF5F8; Serial.println("setF5F8"); }
 	}
+	Serial.println(_functions, BIN);
 
-	/* CODE NEEDED TO DETERMEN WHETHER FUNCION MUST BE SET OR CLEARED */
+	switch( instruction ) {
+		case setF1F4:	train[ _address ].functions |=  _functions; break;
+		case clrF1F4:	train[ _address ].functions &=  _functions; break;
+		case setF5F8:	train[ _address ].functions |=  _functions; break;
+		case clrF5F8:	train[ _address ].functions &=  _functions; break;
+	}
 	scoopInBuffer( _address, instruction, _functions);
 }
 
+void turnPower(uint8_t _power ) {
+	if( _power ) {
+		digitalWrite( power_on, HIGH );
+	}
+	else {
+		digitalWrite( power_on, LOW );
+	}
+}
 
 /******** STATE FUNCTIONS ********/
 #define stateFunction(x) static unsigned char x##F()
@@ -213,7 +252,7 @@ stateFunction( selectNewPacketType ) {								// selects new packet type as well
 	static uint8_t newInstructionCouter = 0, previousAddress;
 
 	if( newInstructionFlag ) { 										// new instructions must be repeated atleast this many times before anything else may be printed
-		if( ++newInstructionCouter == 20 ) {
+		if( ++newInstructionCouter == repeatAmount ) {
 			newInstructionCouter = 0;
 			newInstructionFlag = false;
 		}
@@ -228,23 +267,28 @@ stateFunction( selectNewPacketType ) {								// selects new packet type as well
 	}
 	else {			
 		pickNewAddress:												// normal cycling of instructions
-		for( uint8_t i = currentAddres + 1 ; i <= 80 ; i++ ){
+		for( uint8_t i = currentAddres + 1 ; i <= nTrains - 1 ; i++ ){
 			if( train[i].decoderType <= DCC28 ) {					// check which loco is next in line
 				currentAddres = i ;
+				//Serial.print("cur addres = ");Serial.println(currentAddres);
 				break;
 			}
 		}
 		if( currentAddres == previousAddress ) { 					// if these addresses are still the same it means we have reached the last of active loco's
 																	// then we select the following packet types
+			//Serial.print("cur packetType = ");	
 			switch( packetType ) {
-				case speedPacket: 		packetType = functionPacket1; break;
-				case functionPacket1:	packetType = functionPacket2; break;
-				case functionPacket2:	packetType = speedPacket; 	  break;
+				case speedPacket: 		packetType = functionPacket1;/*Serial.println(packetType);*/ break;
+				case functionPacket1:	packetType = functionPacket2;/*Serial.println(packetType);*/ break;
+				case functionPacket2:	packetType = speedPacket; 	 /*Serial.println(packetType);*/ break;
 			}
+			currentAddres = 0;
 			goto pickNewAddress;
 		}
 		previousAddress = currentAddres ; 
+		return 1;
 	}
+	return 1;
 }
 
 
@@ -385,7 +429,7 @@ stateFunction(awaitPacketSent) {
 
 
 // STATE MACHINE
-byte runOnce;
+byte runOnce = true;
 static void nextState(byte newState) {
 	runOnce = 1;
 	state = newState;
@@ -393,7 +437,7 @@ static void nextState(byte newState) {
 #define State(x) break; case x: /*if(runOnce){Serial.println(#x);runOnce=0;}*/if(x ## F())
 extern void DCCsignals(void) {
 	switch(state){
-		default: state = selectNewPacketType;
+		default: state = selectNewPacketType; Serial.println("WARNING IDLE MODE");
 		
 		State( selectNewPacketType )	nextState( assemblePacket );
 
@@ -417,20 +461,26 @@ ISR(TIMER1_COMPB_vect) {
 		else			   	{ OCR1A = DCC_ZERO_BIT;	}						// '0' 116us
 
 		if( bitMask == 0x40 && ptr == &buffer.array[ buffer.toSend ][6] ) {	// last bit?
-			bitClear(TIMSK1,OCIE1B);
+			bitClear(TIMSK1,OCIE1B);										// kill ISR
 		} 
 		else {																// if not last bit, shift bit mask, and increment pointer if needed
 			bitMask >>= 1;
 			if(!bitMask) {
-				bitMask = 0x80; 
+				bitMask = 0x80;
 				ptr++;
-			}
-		}
+			} 
+		} 
 	}
-}
 
-void initDCC() {				// initialize the timer 
-	cli();
+	else {
+		ISR_state = 0; 
+	} 
+} // toggle pin 8 and 9 for direction*/
+
+
+
+void initDCC() {					 // initialize the timer 
+	cli(); 
 	bitSet(TCCR1A,WGM10);		 
 	bitSet(TCCR1A,WGM11);
 	bitSet(TCCR1B,WGM12);
@@ -449,11 +499,12 @@ void initDCC() {				// initialize the timer
 	for( int i = 1 ; i < nTrains ; i ++ ) {
 		uint8_t type = EEPROM.read( i );
 		setDecoderType( i, type );
-
+		train[i].decoderType = DCC28;
 		train[i].speed = 28; // speed 0
 		train[i].functions = 0;
 		train[i].headLight = 1; // yes we turn on headlights 
 	}
+	sei();
 }// on/off time?
 
 
