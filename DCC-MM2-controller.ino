@@ -13,8 +13,8 @@
 
 #define true 1
 #define false 0
-#include <EEPROM.h>
-#include "config.h"
+//#include <EEPROM.h>
+//#include "config.h"
 #include "DCC.h"
 #include "Serial.h"
 #include "Arduino.h"
@@ -22,26 +22,6 @@
 #include "src/basics/timers.h"
 
 
-#define printDecoder(x) case x: Serial.println(#x); break;
-void getDecoderTypes() {
-	int j;
-	for( j=1 ; j<=80 ; j++ ) {
-		train[j].decoderType = EEPROM.read(j); 
-	}
-		// if(train[j].decoderType < 3) {
-		// 	Serial.print("Addres "); Serial.print(j); Serial.print(" type ");
-		// 	switch(train[j].decoderType) {
-		// 		default: Serial.println("empty");break;
-		// 		printDecoder(MM2);
-		// 		printDecoder(DCC14);
-		// 		printDecoder(DCC28); } } }
-	Serial.write(0x82);
-	train[3].decoderType = DCC28;
-	train[5].decoderType = DCC28;
-	train[6].decoderType = DCC28;
-	train[7].decoderType = DCC28;
-	train[8].decoderType = DCC28;
-}
 
 /***** ROUND ROBIN TASKS ******/
 void EstopPressed() {
@@ -75,10 +55,8 @@ void shortCircuit() {
 /***** INITIALIZATION *****/
 void setup() {
 	Serial.begin(115200);
-	Serial.println("hello Bas");
+	Serial.println("DCC CENTRAL V1.0");
 
-	for(int i=1;i<=80;i++) train[i].speed = 28;
-	getDecoderTypes();
 
 	initIO();
 	digitalWrite(power_on,LOW); // must be low

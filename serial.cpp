@@ -1,7 +1,7 @@
 #include "Serial.h"
 #include "src/basics/timers.h"
 #include "src/basics/io.h"
-#include "config.h"
+//#include "config.h"
 #include <Arduino.h>
 #include "DCC.h"
 #include <EEPROM.h>
@@ -12,7 +12,7 @@ enum serialCommands { // 0x00 to 0x08 are the 8 primary commands. Each instructi
 	setDecoderType,
 	processingCommand,
 	trackCommand,
-	setSpeed,
+	newSpeed,
 	settingFunctions,  // 'f'
 	login};
 
@@ -49,65 +49,60 @@ static void handControllerInstruction(unsigned char _command) {
 	Serial.print("$$");
 	Serial.write(_command); }
 
-static void newPacket() {
-	newInstructionFlag = 1;
-	currentAddres = selectedAddres;
-}
 
 static unsigned char makeAddres(unsigned char b) {
 	b -= '0'; 
-	selectedAddres *= 10;
-	selectedAddres += b;
-	if(!makeNumberT) selectedAddres = b;			// if timeout occured, new number is formed
-	if(selectedAddres > 127) selectedAddres = b; 	// handles address overflow 
+	selectedAddress *= 10;
+	selectedAddress += b;
+	if(!makeNumberT) selectedAddress = b;			// if timeout occured, new number is formed
+	if(selectedAddress > 127) selectedAddress = b; 	// handles address overflow 
 
 		handControllerInstruction(ADDRES);
-		Serial.write(selectedAddres);// }
+		Serial.write(selectedAddress);// }
 	makeNumberT = 200; // after 2 second number starts over
 	return 1; }
 
 
 
 #define serialCommand(x) unsigned char x##F(unsigned char b)
-#define printFunction(x) Serial.print(#x);Serial.print(' ');if(train[selectedAddres].functions& x )Serial.println("ON");else Serial.println("OFF")
+#define printFunction(x) Serial.print(#x);Serial.print(' ');if(currentTrain.functions& x )Serial.println("ON");else Serial.println("OFF")
 //#define function2handcontroller 
 
 
-serialCommand(handControllerCommand) { 
+serialCommand( handControllerCommand ) { 
+	Train currentTrain = getTrain( selectedAddress );																	// fetch variables of current train
+
 	if(b>='A' && b <='D') {																								 // F1 - F4 / F5 - F8 depending on the state of 'functionBank'
 		unsigned char functionShift = F1_F4, pin;
 		unsigned char state = false;
 
-		if(functionBank) {
+		if( functionBank ) {
 			functionShift = F5_F8;	
-			packetType = functionPacket2;
 		}	
-		else {
-			packetType = functionPacket1;
-		}	 
-		functionShift = (1 << (functionShift + b - 'A'));
-		for( pin = 0; pin < 8; pin++ ) if(functionShift & (1 << pin)) break; // stores which pin has changed in pin
-		train[selectedAddres].functions ^= functionShift; // toggles one of the functions
-		if(train[selectedAddres].functions & functionShift) state = '1';
+
+		functionShift = ( 1 << ( functionShift + ( b - 'A' ) ) );
+		for( pin = 0; pin < 8; pin++ ) {
+			if(functionShift & (1 << pin)) break; // stores which pin has changed in pin
+		}
+
+		
+		currentTrain.functions ^= functionShift; // toggles one of the functions
+		
+		if( currentTrain.functions & functionShift) state = '1';
 		else												state = '0';
-		if(handController) {
-			handControllerInstruction(FUNCTION); Serial.write(pin + '1');Serial.write(state); }
-		else switch(functionShift) {
-			case F1: printFunction(F1); break;
-			case F2: printFunction(F2); break;
-			case F3: printFunction(F3); break;
-			case F4: printFunction(F4); break;
-			case F5: printFunction(F5); break;
-			case F6: printFunction(F6); break;
-			case F7: printFunction(F7); break;
-			case F8: printFunction(F8); break; } } 
+
+		handControllerInstruction(FUNCTION); Serial.write(pin + '1');Serial.write(state); 
+	}		
 
 	else if(b == 'E'){
-		train[selectedAddres].speed |= ESTOP_MASK; }
+		currentTrain.speed |= ESTOP_MASK; 
+		setSpeed( selectedAddress, currentTrain.speed ); }
 	else {
-		train[selectedAddres].speed &= ~ESTOP_MASK;
+		currentTrain.speed &= ~ESTOP_MASK;
 		switch(b) {
-			case '#': functionBank ^= 0x1; 
+
+			case '#': 
+			functionBank ^= 0x1; 
 			handControllerInstruction(FUNCTION_BANK);
 			if(functionBank){ Serial.write('1'); } 
 			else {			  Serial.write('0'); } 	// toggle this 1 bit so we can select F1-F4 and F5-F8
@@ -125,52 +120,55 @@ serialCommand(handControllerCommand) {
 			}
 			break;	
 
-			case 'S': train[selectedAddres].speed &= 0b11000000;train[selectedAddres].speed|=28;packetType = speedPacket; break;	 // S
-			case ':': train[selectedAddres].speed-=3;packetType = speedPacket;	break;											 // <<	:
-			case ';': train[selectedAddres].speed+=3;packetType = speedPacket;	break;											 // >>	;
-			case '<': train[selectedAddres].speed--; packetType = speedPacket;	break;											 // <
-			case '>': train[selectedAddres].speed++; packetType = speedPacket;	break;											 // >
+			case 'S': currentTrain.speed &= 0b11000000;currentTrain.speed|=28; break;	 // S
+			// case ':': currentTrain.speed-=3;packetType = speedPacket;	break;											 // <<	:
+			// case ';': currentTrain.speed+=3;packetType = speedPacket;	break;											 // >>	;
+			// case '<': currentTrain.speed--; packetType = speedPacket;	break;											 // <
+			// case '>': currentTrain.speed++; packetType = speedPacket;	break;											 // >
 
-			case '*': train[selectedAddres].headLight ^= 0x1; 
-				packetType = functionPacket1;
-				handControllerInstruction(HEADLIGHT);
-				if(train[selectedAddres].headLight) { Serial.write('1'); }
-				else{ 				 				  Serial.write('0'); }
-				break; }
-		newPacket(); }
-	return 1; }
+			case '*': currentTrain.headLight ^= 0x1; 
+			handControllerInstruction(HEADLIGHT);
+			if(currentTrain.headLight) { Serial.write('1'); }
+			else{ 				 		 Serial.write('0'); }
+			break; 
+		}
+	}
+	return 1; 
+}
+
 
 serialCommand(setDecoderType){	
+	Train currentTrain = getTrain( selectedAddress );
+
 	b -= '0';
 	b = constrain(b,0,3);
 	switch(b) {
-		case MM2:	train[selectedAddres].decoderType = MM2; break;
-		case DCC14: train[selectedAddres].decoderType = DCC14; break;
-		case DCC28: train[selectedAddres].decoderType = DCC28; break;
-		default:	train[selectedAddres].decoderType = EMPTY_SLOT; break; }
+		case MM2:	currentTrain.decoderType = MM2; break;
+		case DCC14: currentTrain.decoderType = DCC14; break;
+		case DCC28: currentTrain.decoderType = DCC28; break;
+		default:	currentTrain.decoderType = EMPTY_SLOT; break; }
 
-	EEPROM.write(selectedAddres, b);														// store in EEPROM
+	EEPROM.write(selectedAddress, b);														// store in EEPROM
 	if(b != EMPTY_SLOT) {
 		handControllerInstruction(DECODER_SELECTED); Serial.write(b); }
 	else {
-		train[selectedAddres].speed = 0;
-		train[selectedAddres].functions = 0;
-		train[selectedAddres].headLight = 0;
-		if(!handController) Serial.print("Train ");Serial.print(selectedAddres);Serial.println(" deleted!");
-		handControllerInstruction(TRAIN_DELETED); Serial.write(selectedAddres); } 
+		currentTrain.speed = 0;
+		currentTrain.functions = 0;
+		currentTrain.headLight = 0;
+		if(!handController) Serial.print("Train ");Serial.print(selectedAddress);Serial.println(" deleted!");
+		handControllerInstruction(TRAIN_DELETED); Serial.write(selectedAddress); } 
 	return 1; }
 
-serialCommand(setSpeed) {
-	b = constrain(b,0,56);
-	train[selectedAddres].speed = constrain(b,0,56);// should be redundant
-	handControllerInstruction(_SPEED); Serial.write(train[selectedAddres].speed);
-	newPacket();
-	packetType = speedPacket;
+serialCommand(newSpeed) {
+	b = constrain(b, 0, 56);
+	handControllerInstruction(_SPEED); Serial.write( b );
+	
+	setSpeed( selectedAddress, b );
 	return 1;}
 
 serialCommand(login) {
     handControllerInstruction(sendHandShake); // return handshake to handcontroller
-	Serial.write('0');
+	//Serial.write('0');
 
 	connectT = 5;		// set timeout time at 10 seconds
 	handController = 1; // handcontroller is found
@@ -179,27 +177,29 @@ serialCommand(login) {
 #undef serialCommand
 
 unsigned char setAddres(unsigned char b) {				// OBSOLETE
-	selectedAddres = constrain(b,1,80);
-	if(!handController)Serial.print("selected addres = ");Serial.println(selectedAddres);
+	selectedAddress = constrain(b,1,80);
+	if(!handController)Serial.print("selected addres = ");Serial.println(selectedAddress);
 	return 1;}
 
 unsigned char setFunctions(unsigned char b) {
-	train[selectedAddres].functions = b;
+	//currentTrain.functions = b;
 	return 1; }
 
 
 unsigned char setTrain(signed char b) {											// THIS FUNCTION HAS BECOME OBSOLETE FOR NOW, IT MAY BE USEFULL FOR THE FUTURE FOR USE WITH THE COMPUTER
+	Train currentTrain = getTrain( selectedAddress );	
+
 	switch(caseSelector) {
-		case 0: selectedAddres = b;	break;
-		case 1: train[selectedAddres].speed = b; break;
-		case 2: if(b&1) train[selectedAddres].headLight |= 1;	break;	 
+		case 0: selectedAddress = b;	break;
+		case 1: currentTrain.speed = b; break;
+		case 2: if(b&1) currentTrain.headLight |= 1;	break;	 
 		case 3:
-		train[selectedAddres].functions = b; 
-		Serial.print("selected addres: ");Serial.println(selectedAddres);
-		Serial.print("speed of train is set at: ");Serial.println(train[selectedAddres].speed);
-		Serial.print("headlight is turned: ");if(train[selectedAddres].headLight)Serial.println("ON");else Serial.println("OFF");
-		Serial.print("funcion F1 - F8 ");Serial.println((unsigned char)train[selectedAddres].functions, BIN);
-		newInstructionFlag = true;
+		currentTrain.functions = b; 
+		Serial.print("selected addres: ");Serial.println(selectedAddress);
+		Serial.print("speed of train is set at: ");Serial.println(currentTrain.speed);
+		Serial.print("headlight is turned: ");if(currentTrain.headLight)Serial.println("ON");else Serial.println("OFF");
+		Serial.print("funcion F1 - F8 ");Serial.println((unsigned char)currentTrain.functions, BIN);
+		//newInstructionFlag = true;
 		mode = IDLE;
 		return 1;
 		break;}
@@ -229,7 +229,7 @@ void readSerialBus() {
 			serialCommand(setDecoderType);		 // 'b'					
 			//serialCommand(PROCESSING_COMMAND:	 // 'c'					 
 			//serialCommand(TRACK_COMMAND:		 // 'd'									 
-			serialCommand(setSpeed);			 // 'e'
+			serialCommand(newSpeed);			 // 'e'
 			//serialCommand(SETTING_FUNCTIONS);  // 'f'
 			serialCommand(login);				 // 'g'								 
 																						 

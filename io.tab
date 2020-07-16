@@ -1,5 +1,5 @@
 4	directionPin2	OUTPUT
 3	directionPin	OUTPUT
 2	power_on	OUTPUT
-13  blinkLed    OUTPUT
+13	blinkLed	OUTPUT
 A4	currentSensePin	INPUT

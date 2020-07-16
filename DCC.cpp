@@ -1,283 +1,435 @@
+/*
+DCC CENTRAL by Bas Knippels
+
+This software is a very basic DCC central. It can:
+*	control DCC trains up to address 99
+*	control 28 speed steps in both directions
+*   control functions F0 through F8
+
+What it cannot do:
+*	read or control or do anything with CV's
+*	it has no loconet or P51 or expressNet or any other known protocols embedded.
+
+USAGE:
+You can call these functions to controll the trains
+
+  setSpeed( address, value ); 		enter 0 <> 56 for speeds -28 <> + 28
+  setHeadlight( address, value ); 	1 or 0
+  setFunctions( address, value ); 	1 - 99 are available
+  addLoco( address, decoderType );
+  deleteLoco( address );
+
+decoderTypes {
+	MM2,
+	DCC14,
+	DCC28,
+	SELECTRIX,
+	EMPTY_SLOT = 255};
+
+MM2 and selectrix are not implemented at this point.
+The decoder types are stored within the EEPROM memory
+
+THE WORKS:
+The central has 2 array buffers used to transmitt data. For the sake of efficiency 1 buffer is filled while the other buffer is clocked out to the tracks
+New instructions are put in a FIFO type buffer. This allows for more than 1 parallel process to control trains. It is possible to let this buffer
+overflow, so make sure you don't continously call the controll functions. Once is enough per change.
+
+If you want to read out the current functions of any train. You can call the getTrain function of type Train like:
+	Train currentTrain = getTrain( 40 );
+
+This struct contains these variables for you to read out.
+uint8_t	speed
+uint8_t	headlight
+uint8_t	functions
+uint8_t	decoderType
+
+Also important note: 
+Setting a function is done by sending one whole '1' in a byte. bit 0 corresponds with F1 bit 7 corresponds with F8
+Example, setting F4:
+	setFunctions( 30, 0b00001000);
+
+To clear a fuction you have to send the inverse instead.
+Example clearing F6 is done by
+	setFunctions( 20, ~0b00100000 ); // or
+	setFunctions( 20,  0b11011111 ); // same thing, different writing method
+
+If you want to toggle a function you first have to read the current function state, and set or clear your bit accordingly
+
+This is done like this because if you set or clear a function it is not needed to know the current state of all 8 functions.
+You can also controll 1 function per time with the setFunctions() method. This method should prevent people from accidently
+controlling other unintended functions.
+
+*/
+
 #include "DCC.h"
-#include "config.h"
+#include <EEPROM.h>
 
-void print_binary(byte *ptr) {
-	byte bitMask = 0x80, counter = 0;
-	while(1) {
-		if(*ptr & bitMask)	Serial.write('1');
-		else 				Serial.write('0');
-
-		bitMask >>= 1;
-		if(bitMask == 0) {
-			bitMask = 0x80;
-			ptr++ ;
-		}
-		counter++;
-		if(counter == 14 || counter == 15 || counter == 23 || counter == 24 || counter == 32 || counter == 33 || counter == 41) Serial.write(' ');
-		if(counter == 27) Serial.write('.');
-		if(counter == 42) {
-			Serial.println();
-			break;
-		}
-	}
-}
-
-
-
+#define nTrains 100
 
 
 enum states {
-	assemblePacket = 1,
-	awaitPacketSent,
-	nextAddres,
-	newPacketSent,
-	nextPacketType };
+	selectNewPacketType ,
+	assemblePacket ,
+	awaitPacketSent ,
+};
 
-byte debug = 0;
+enum packetTypes {
+	speedPacket = 1 ,
+	functionPacket1 ,
+	functionPacket2 ,
+	functionPacket3 ,
+};
+
+uint8_t debug = 0;
 void startDebug() 			 { if(debug) Serial.println("%%start log"); }
 #define printDebug(x)  		   if(debug) Serial.print(x)
 #define printDebugln(x)	       if(debug) {Serial.println(x); }
 #define printBinln(x)	       if(debug) {Serial.println(x, BIN); }
 void endDebug()				 { if(debug) Serial.write(0x80); }
 
-unsigned char newInstructionFlag, packetSentFlag, lastAddresFlag, newPacketSentFlag, state = assemblePacket;
 
-unsigned char transmittBuffer[8]; 
-unsigned char *ptr;	
-unsigned char packetType = speedPacket, ISR_state = 0, sendPacket_state = 0, Bit;	// for DCC packets
-int currentAddres=0, selectedAddres=0;	// must be int to prevent overflows during makeAddres()
+#define bufferSize 64
+// variables
+Train train[nTrains]; 
+
+struct {
+	uint8_t In;
+	uint8_t Out;
+	uint8_t newCommands[bufferSize];  // FIFO buffer used to store new commands
+	uint8_t toFill : 1;
+	uint8_t toSend : 1;
+	uint8_t array[2][8];
+	uint8_t byteCount;
+} buffer;
+
+uint8_t *ptr;
+uint8_t packetType = speedPacket, sendPacket_state = 0, Bit;	// for DCC packets
+uint8_t currentAddres=0, selectedAddress=0;	// must be int to prevent overflows during makeAddres()
+uint8_t newInstructionFlag, state = assemblePacket;
+
+// CONTROL FUNCTIONS
+enum instructions {
+	speedInstruction,
+	setF1F4,
+	clrF1F4,
+	setF5F8,
+	clrF5F8,
+	headlightInstruction,
+};
+
+void setDecoderType( uint8_t _address, uint8_t type ) {
+	train[ _address ].decoderType = type;
+}
+
+uint8_t checkAddress( uint8_t _address ) {
+	for( int j = 0 ; j < nTrains; j ++ ) {
+		if( train[j].decoderType <= 2 ) return true;
+	}
+	return false;
+}
+
+void scoopInBuffer(uint8_t _address, uint8_t _instruction, uint8_t _data) {
+	if( !checkAddress ) return; // if address does not exist, disregard the instruction
+
+	buffer.newCommands[ buffer.In ++ ] = _address;
+	buffer.newCommands[ buffer.In ++ ] = _instruction;
+	buffer.newCommands[ buffer.In ++ ] = _data;
+
+	buffer.byteCount += 3;
+	if( buffer.bytCount >= bufferSize ) {
+		Serial.println("INSTRUCTION BUFFER HAS OVERFLOWED, YOU MORRON!!! (don't be offened, it's a joke)");
+		Serial.println("CATASTROPHIC SYSTEM FAILURE, PROGRAM HAS TERMINATED"); 
+		Serial.println("you sent too many bytes into the FIFO buffer, correct this");
+		digitalWrite( trackPower, LOW );
+		cli();
+		while ( 1 ) ;
+	}
+}
+
+void scoopOutBuffer(uint8_t *_address, uint8_t *_instruction) {
+	uint8_t _data;
+
+	*_address	   = buffer.newCommands[ buffer.Out ++ ];
+	*_instruction  = buffer.newCommands[ buffer.Out ++ ];
+	_data		   = buffer.newCommands[ buffer.Out ++ ];
+
+	buffer.byteCount -= 3;
+
+	uint8_t _state = *_instruction;
+	switch( _state ) {
+		case speedInstruction:		packetType = speedPacket; 		train[ *_address ].speed      =  _data; break;
+		case setF1F4:				packetType = functionPacket1; 	train[ *_address ].functions |=  _data; break;
+		case clrF1F4:				packetType = functionPacket1; 	train[ *_address ].functions &= ~_data; break;
+		case setF5F8:				packetType = functionPacket2; 	train[ *_address ].functions |=  _data; break;
+		case clrF5F8:				packetType = functionPacket2; 	train[ *_address ].functions &= ~_data; break;
+		case headlightInstruction:	packetType = functionPacket1;	train[ *_address ].headLight  =  _data; break;
+	}
+
+	Serial.print("train ");Serial.print( _address );Serial.print("'s speed = ");Serial.println( train[ *_address ].speed  ); // new instructions are printed after they are processed
+	Serial.print("functions ");Serial.println( train[ *_address ].functions );
+	Serial.print("headlight ");Serial.println( train[ *_address ].headLight );
+
+	newInstructionFlag = true;
+}
+
+Train getTrain( uint8_t _address ) {
+	return train[ _address ] ;
+}
+
+void setSpeed( uint8_t _address, uint8_t _speed) {
+	scoopInBuffer( _address, speedInstruction, _speed) ;
+}
+
+void setHeadlight( uint8_t _address, uint8_t on_off) {
+	scoopInBuffer(_address ,headlightInstruction, on_off );
+}
+
+void setFunctions( uint8_t _address, uint8_t _functions) {
+	uint8_t ON, instruction, bitCounter = 0;
+
+	for( uint8_t j = 0 ; j < 8 ; j ++ ) {
+		if( _functions & ( 1 << j ) ) bitCounter++;
+	}
+
+	if( bitCounter > 1 ) { // more than 1 bit -> clear function
+		if( _functions & 0x0F ) instruction = clrF1F4;
+		else					instruction = clrF5F8;
+	}
+	else {
+		if( _functions & 0x0F )	instruction = setF1F4;
+		else					instruction = setF5F8;
+	}
+
+	/* CODE NEEDED TO DETERMEN WHETHER FUNCION MUST BE SET OR CLEARED */
+	scoopInBuffer( _address, instruction, _functions);
+}
 
 
 /******** STATE FUNCTIONS ********/
 #define stateFunction(x) static unsigned char x##F()
-stateFunction(assemblePacket) {
 
+
+stateFunction( selectNewPacketType ) {								// selects new packet type as well as new address
+	static uint8_t newInstructionCouter = 0, previousAddress;
+
+	if( newInstructionFlag ) { 										// new instructions must be repeated atleast this many times before anything else may be printed
+		if( ++newInstructionCouter == 20 ) {
+			newInstructionCouter = 0;
+			newInstructionFlag = false;
+		}
+		else {
+			return 1; 												// keep using current address and packet type
+		}
+	} 
+
+	if( buffer.In != buffer.Out ) {									// if in != out there is another new instruction in the buffer to be sent
+		scoopOutBuffer( &currentAddres, &packetType ); 				// this sets new address as well as packet type
+		newInstructionFlag = 1;
+	}
+	else {			
+		pickNewAddress:												// normal cycling of instructions
+		for( uint8_t i = currentAddres + 1 ; i <= 80 ; i++ ){
+			if( train[i].decoderType <= DCC28 ) {					// check which loco is next in line
+				currentAddres = i ;
+				break;
+			}
+		}
+		if( currentAddres == previousAddress ) { 					// if these addresses are still the same it means we have reached the last of active loco's
+																	// then we select the following packet types
+			switch( packetType ) {
+				case speedPacket: 		packetType = functionPacket1; break;
+				case functionPacket1:	packetType = functionPacket2; break;
+				case functionPacket2:	packetType = speedPacket; 	  break;
+			}
+			goto pickNewAddress;
+		}
+		previousAddress = currentAddres ; 
+	}
+}
+
+
+stateFunction(assemblePacket) {
 	startDebug();
 
-	struct Packets {
+	struct {
 		unsigned char addres;
 		unsigned char speed;
 		unsigned char functions1;
 		unsigned char functions2;
-		unsigned char checksum; } Packet;
+		unsigned char checksum; 
+	} Packet;
 	
-	static unsigned char prevDir; // used to remember what the train's direction was in case the new speed is 0
-
+	static unsigned char prevDir; // used to remember what the train's direction was in case the new speed becomes 0. This is needed so the light won't toggle if a train stops
 		
-	if(currentAddres) {
-	/******	ADDRES	*******/ 
-		Packet.addres = currentAddres;
+	buffer.toFill ^= 1; // toggle to the other buffer to fill
 
-		if(packetType == 1) {
-			printDebug("current addres "); printDebugln(currentAddres);
-			printDebug("packet type    "); printDebugln(packetType);
-			printDebugln("1 = speed, 2 = function pack 1, 3 = function pack 2");
-		}
+/******	ADDRES	*******/ 
+	Packet.addres = currentAddres;
 
-		switch(packetType){																		// there are 3 types of packets, speed, F1-F4 + HL and F5-F8
-			signed char speed_tmp;																// make local variable for speed to calculate with
-		
-		/******	SPEED	*******/ 
-			case speedPacket:
-			speed_tmp = train[currentAddres].speed - 28;
-			Packet.speed = prevDir;
-			if( speed_tmp < 0 ) {														// reverse operation
-				speed_tmp = -speed_tmp;
-				Packet.speed = REVERSE; }
-			else if( speed_tmp > 0 ) {																				// forward operation
-				Packet.speed = FORWARD;	}	
-			prevDir = Packet.speed;												// store speed in 'speed_tmp' to calculate with
+	if( packetType == 1) {		// merely code for debugging purposes
+		printDebug("current addres "); printDebugln(currentAddres);
+		printDebug("packet type    "); printDebugln(packetType);
+		printDebugln("1 = speed, 2 = function pack 1, 3 = function pack 2");
+	}
 
-			if(speed_tmp & ESTOP_MASK) {
-				//train[currentAddres].speed = 28;												// this causes problems? I think it does because it corrupts all following commands
-				Packet.speed &= CLEAR_SPEED;													// sets the speed at E-stop without modifying the direcion bits
-				Packet.speed |= 1; } 
-			else {
+	switch(packetType){																		// there are 3 types of packets, speed, F1-F4 + HL and F5-F8
+		signed char speed_tmp;																// make local variable for speed to calculate with
 	
-				if(train[currentAddres].decoderType == DCC14) speed_tmp /= 2;
-				if(speed_tmp == 0) {															
-					//Packet.speed &= CLEAR_SPEED; 
-					Packet.speed &= 0b11100000;}// stop										// sets the speed at 0 without modifying the direction bits
-				else {						
-					if(train[currentAddres].decoderType==DCC28) {								// equal speed steps for DCC28 need the 5th bit set
-						Packet.speed |= ( ( speed_tmp + 3 ) / 2 );
-						if(speed_tmp % 2 == 0 ) Packet.speed |= ( 1 << 4 ); }							// set extra speed bit for DCC 28 decoders
-					else if(train[currentAddres].decoderType==DCC14) {
-						Packet.speed |= (speed_tmp + 1);
-						if(train[currentAddres].headLight) Packet.speed |= ( 1 << 4 ); } } }		// set headlight bit for DCC 14 decoders NOTE might be unneeded as we might be able to this in the first function unsigned char
-			
-			transmittBuffer[4] = Packet.speed; 
-			break;
-		
-			/******	FUNCTIONS F1 - F4	*******/	
-			case functionPacket1:
-			Packet.functions1 = FUNCTIONS1;																						 // mark this as instructions unsigned char
-			Packet.functions1 |= (train[currentAddres].functions & 0x0F);						// F1 - F4
-			if(train[currentAddres].headLight && train[currentAddres].decoderType == DCC28) {
-				Packet.functions1 |= (1<<4); }					 								// turns light on for DCC 28 decoders, the if statement might be useless as it may do no harm to do this for dcc 14 decoders as well
-			transmittBuffer[4] = Packet.functions1;
-			break; 
-				
-			/******	FUNCTIONS F5 - F8	*******/ 
-			case functionPacket2: 
-			Packet.functions2 = FUNCTIONS2;																						 // mark this as instructions unsigned char
-			Packet.functions2 |= (train[currentAddres].functions >> 4);							// F5 - F8
-			transmittBuffer[4] = Packet.functions2;
-			break; }
+	/******	SPEED	*******/ 
+		case speedPacket:
+		speed_tmp = train[currentAddres].speed - 28;
+		Packet.speed = prevDir;
+		if( speed_tmp < 0 ) {														// reverse operation
+			speed_tmp = -speed_tmp;
+			Packet.speed = REVERSE; }
+		else if( speed_tmp > 0 ) {																				// forward operation
+			Packet.speed = FORWARD;	}	
+		prevDir = Packet.speed;												// store speed in 'speed_tmp' to calculate with
 
-		
-			
-			/******	FUNCTIONS F9 - F12	*******/
-			/*case functionPacket3:																										 // NOTE future usage?
-			Packet.functions3 = FUNCTIONS2;																						 // mark this as instructions unsigned char
-			Packet.functions3 |= (train[currentAddres].functions2 >> 4);						// F9 - F12
-			transmittBuffer[3] = Packet.functions3;
-			break; }*/
+		if(speed_tmp & ESTOP_MASK) {
+			//train[currentAddres].speed = 28;												// this causes problems? I think it does because it corrupts all following commands
+			Packet.speed &= CLEAR_SPEED;													// sets the speed at E-stop without modifying the direcion bits
+			Packet.speed |= 1; } 
+		else {
 
-		/***** CHECKSUM *******/	
-		Packet.checksum = Packet.addres ^ transmittBuffer[4];									
+			if(train[currentAddres].decoderType == DCC14) speed_tmp /= 2;
+			if(speed_tmp == 0) {															
+				//Packet.speed &= CLEAR_SPEED; 
+				Packet.speed &= 0b11100000;}// stop												// sets the speed at 0 without modifying the direction bits
+			else {						
+				if(train[currentAddres].decoderType==DCC28) {									// equal speed steps for DCC28 need the 5th bit set
+					Packet.speed |= ( ( speed_tmp + 3 ) / 2 );
+					if(speed_tmp % 2 == 0 ) Packet.speed |= ( 1 << 4 ); }						// set extra speed bit for DCC 28 decoders
+				else if(train[currentAddres].decoderType==DCC14) {
+					Packet.speed |= (speed_tmp + 1);
+					if(train[currentAddres].headLight) Packet.speed |= ( 1 << 4 ); } } }		// set headlight bit for DCC 14 decoders NOTE might be unneeded as we might be able to this in the first function unsigned char
 		
-		/***** SHIFT PACKETS FOR TRANSMITT BUFFER *******/ 
-		transmittBuffer[0] = 0x01;																// pre amble
-		transmittBuffer[1] = 0xFF;
-		transmittBuffer[2] = 0xFC;	// pre-amble + 2 0 bits						 				// pre amble, 0 bit, 1st 0 bit of addres unsigned char
-		transmittBuffer[3] = Packet.addres << 1;												// addres unsigned char, 0 bit
-		//transmittBuffer[4] is filled above
-		transmittBuffer[5] = Packet.checksum >> 1;												// 0 bit, 7 bits of checksum
-		transmittBuffer[6] = Packet.checksum << 7 | 1<<6; }	
+		buffer.array[ buffer.toFill ] [ 4 ] = Packet.speed; 
+		break;
+	
+		/******	FUNCTIONS F1 - F4	*******/	
+		case functionPacket1:
+		Packet.functions1 = FUNCTIONS1;															
+		Packet.functions1 |= (train[currentAddres].functions & 0x0F);							// F1 - F4
+		if(train[currentAddres].headLight && train[currentAddres].decoderType == DCC28) {
+			Packet.functions1 |= (1<<4); 
+		}					 																	// turns light on for DCC 28 decoders, the if statement might be useless as it may do no harm to do this for dcc 14 decoders as well
+		buffer.array[ buffer.toFill ] [ 4 ] = Packet.functions1;
+		break; 
+			
+		/******	FUNCTIONS F5 - F8	*******/ 
+		case functionPacket2: 
+		Packet.functions2 = FUNCTIONS2;															
+		Packet.functions2 |= (train[currentAddres].functions >> 4);								// F5 - F8
+		buffer.array[ buffer.toFill ] [ 4] = Packet.functions2;
+		break; 
+	}
+
+		/******	FUNCTIONS F9 - F12	*******/
+		/*case functionPacket3:																	// NOTE future usage
+		Packet.functions3 = FUNCTIONS2;															
+		Packet.functions3 |= (train[currentAddres].functions2 >> 4);							// F9 - F12
+		buffer.array[3] = Packet.functions3;
+		break; }*/
+
+	/***** CHECKSUM *******/	
+	Packet.checksum = Packet.addres ^ buffer.array[ buffer.toFill ] [ 4 ];									
+	
+	/***** SHIFT PACKETS FOR  BUFFER ARRAY *******/ 
+	buffer.array[ buffer.toFill ] [ 0 ] = 0x01;																// pre amble
+	buffer.array[ buffer.toFill ] [ 1 ] = 0xFF;
+	buffer.array[ buffer.toFill ] [ 2 ] = 0xFC;	// pre-amble + 2 0 bits						 				// pre amble, 0 bit, 1st 0 bit of addres unsigned char
+	buffer.array[ buffer.toFill ] [ 3 ] = Packet.addres << 1;												// addres unsigned char, 0 bit
+//	buffer.array[ buffer.toFill ] [ 4 ] is filled above
+	buffer.array[ buffer.toFill ] [ 5 ] = Packet.checksum >> 1;												// 0 bit, 7 bits of checksum
+	buffer.array[ buffer.toFill ] [ 6 ] = Packet.checksum << 7 | 1 << 6; 
+
 //		11111111111111 0 11111111 0 00000000 0 11111111 1	<- IDLE PACKET
 //
 //		 0			 1			2			3			 4			5	
 //	11111111	111111_0_1	 1111111_0	 00000000	 0_1111111 	11000000
 //		0xFF	 0xFD		 0xFE		0x00			0x7F	0xC0
 	
-	else {																								// if current addres = 0,	
-		printDebugln("idle packet");
-		transmittBuffer[0] = 0x01;																		// we overwrite the buffers to 
-		transmittBuffer[1] = 0xFF;																		// we overwrite the buffers to 
-		transmittBuffer[2] = 0xFD;																		// assemble an IDLE packet
-		transmittBuffer[3] = 0xFE;																		
-		transmittBuffer[4] = 0x00;																		
-		transmittBuffer[5] = 0x7F;
-		transmittBuffer[6] = 0xC0; }
-	
-	ptr = &transmittBuffer[0];																			// point ptr at first unsigned char
-	packetSentFlag = false;																				 // clear flag
-	bitSet(TIMSK1,OCIE1B);																					// send the unsigned char, enable interrupt
+	// else {																											// if current addres = 0,OBSOLETE IDLE packets are no longer send
+	// 	printDebugln("idle packet");
+	// 	buffer.array[ buffer.toFill ] [ 0 ] = 0x01;																		// we overwrite the buffers to 
+	// 	buffer.array[ buffer.toFill ] [ 1 ] = 0xFF;																		// we overwrite the buffers to 
+	// 	buffer.array[ buffer.toFill ] [ 2 ] = 0xFD;																		// assemble an IDLE packet
+	// 	buffer.array[ buffer.toFill ] [ 3 ] = 0xFE;																		
+	// 	buffer.array[ buffer.toFill ] [ 4 ] = 0x00;																		
+	// 	buffer.array[ buffer.toFill ] [ 5 ] = 0x7F;
+	// 	buffer.array[ buffer.toFill ] [ 6 ] = 0xC0; 
+	// }
 
 
-	printDebug("address  "); printDebugln(Packet.addres);
-	printDebug("speed    "); printDebugln(transmittBuffer[3]& 0b11111);
-	printDebug("checksum "); printDebugln(Packet.checksum);
+	printDebug("address  "); printDebugln( Packet.addres );
+	printDebug("speed    "); printDebugln( buffer.array[ buffer.toSend ][3] & 0b11111 );
+	printDebug("checksum "); printDebugln( Packet.checksum) ;
 
-	//if(debug) {
-		//print_binary(transmittBuffer);
-	//}
 	endDebug();
 
-	return true; }
+	return true;
+}
 	
 stateFunction(awaitPacketSent) {
-	if(packetSentFlag)	return 1;
-	else 				return 0;}
-	
-stateFunction(nextAddres) {
-	unsigned char i;
-	for(i=currentAddres+1; i<=80; i++){
-		if(train[i].decoderType <= 2){currentAddres=i; return 1;}}
-	currentAddres = 0;																			// if no valid addres is found, adres 0 will be selected
-	lastAddresFlag = 1;
-	return 1; }
-	
-stateFunction(newPacketSent) {
-	if(newInstructionFlag<60){ 	
-		// Serial.print("    selected addres "); Serial.println(currentAddres);
-		// Serial.print("    packetType ");
-		// if(packetType == speedPacket) Serial.println("speedPacket");
-		// if(packetType == functionPacket1) Serial.println("functionPacket1");
-		// if(packetType == functionPacket2) Serial.println("functionPacket2");
-		// Serial.println(newInstructionFlag);																			// flag is secretely also used to count
-		newInstructionFlag++;}
-		
-	else newInstructionFlag = false;
-	return 1; }
-	
-stateFunction(nextPacketType) {
-	switch(packetType) {
-		case speedPacket: 		packetType = functionPacket1; break;
-		case functionPacket1:	packetType = functionPacket2; break;
-		case functionPacket2:	packetType = speedPacket; 	  break;}
-	return 1; }
+	if( bitRead(TIMSK1,OCIE1B) ) return 0;										// if previous transmission is still bussy, return false;
+	else {																		
+		buffer.toSend = buffer.toFill ;											// select other buffer
+		ptr = &buffer.array[ buffer.toSend ] [ 0 ];								// let the pointer point to the correct ellement
 
-byte runOnce;
-static void nextState(byte newState)	{
-	runOnce = 1;
-	state = newState;
-
+		bitSet(TIMSK1,OCIE1B);	// fire up the ISR
+		return 1;
+	}
 }
 
+
+
 // STATE MACHINE
+byte runOnce;
+static void nextState(byte newState) {
+	runOnce = 1;
+	state = newState;
+}
 #define State(x) break; case x: /*if(runOnce){Serial.println(#x);runOnce=0;}*/if(x ## F())
 extern void DCCsignals(void) {
 	switch(state){
-		default: state = assemblePacket;
+		default: state = selectNewPacketType;
 		
-		State(assemblePacket)		nextState(awaitPacketSent ); 
+		State( selectNewPacketType )	nextState( assemblePacket );
+
+		State( assemblePacket )			nextState( awaitPacketSent ); 
 		
-		State(awaitPacketSent){	
-			if(newInstructionFlag)	nextState(newPacketSent);
-			else					nextState(nextAddres); }
-		
-		State(nextAddres){
-			if(lastAddresFlag)		nextState( nextPacketType );
-			else					nextState( assemblePacket ); }
-		
-		State(newPacketSent){
-			if(newInstructionFlag)	nextState( assemblePacket );
-			else					nextState( nextPacketType ); }
-		
-		State(nextPacketType)		nextState( assemblePacket ); 
+		State( awaitPacketSent )		nextState( selectNewPacketType );
 		
 		break; } }
 
 
 /***** INTERRUPT SERVICE ROUTINE *****/		
 ISR(TIMER1_COMPB_vect) {
-	//cli();
-	static unsigned char bitMask = 0x80;
+	static unsigned char bitMask = 0x80, ISR_state = 0;;
 
-	//static unsigned int counter = 0xffff;
-	// if DCC
-	//counter++;
-	//if(!counter) PORTB ^= (1 << 5);
-
-	PORTD ^= 0b00011000; // pin 3 and 4 needs to be toggled
+	PORTD ^= 0b00011000; 													// pin 3 and 4 needs to be toggled
 	
-	if(!ISR_state){															// pick a bit and set duration time accordingly		
-		ISR_state = 1;
+	ISR_state ^= 1;
+	if(ISR_state) {															// pick a bit and set duration time accordingly		
 
-		//cli();
-		if(*ptr & bitMask) { OCR1A=DCC_ONE_BIT;	 /*Serial.print('1'); */ }	// '1' 58us
-		else			   { OCR1A=DCC_ZERO_BIT; /*Serial.print('0');*/ }	// '0' 116us
-		//sei();
-		//OCR1A=DCC_ZERO_BIT;
+		if( *ptr & bitMask ){ OCR1A = DCC_ONE_BIT;	}						// '1' 58us
+		else			   	{ OCR1A = DCC_ZERO_BIT;	}						// '0' 116us
 
-		if(bitMask == 0x40 && ptr == &transmittBuffer[6]) {					// last bit?
-			ptr = &transmittBuffer[0];
+		if( bitMask == 0x40 && ptr == &buffer.array[ buffer.toSend ][6] ) {	// last bit?
 			bitClear(TIMSK1,OCIE1B);
-			/*Serial.println();*/
-			packetSentFlag = true;} 
-
+		} 
 		else {																// if not last bit, shift bit mask, and increment pointer if needed
 			bitMask >>= 1;
 			if(!bitMask) {
 				bitMask = 0x80; 
-				ptr++;} } }
+				ptr++;
+			}
+		}
+	}
+}
 
-	else {
-		ISR_state = 0; } } // toggle pin 8 and 9 for direction*/
-
-void initDCC() {					 // initialize the timer 
+void initDCC() {				// initialize the timer 
 	cli();
 	bitSet(TCCR1A,WGM10);		 
 	bitSet(TCCR1A,WGM11);
@@ -293,4 +445,35 @@ void initDCC() {					 // initialize the timer
 
 	OCR1A = DCC_ONE_BIT;
 	sei();
+
+	for( int i = 1 ; i < nTrains ; i ++ ) {
+		uint8_t type = EEPROM.read( i );
+		setDecoderType( i, type );
+
+		train[i].speed = 28; // speed 0
+		train[i].functions = 0;
+		train[i].headLight = 1; // yes we turn on headlights 
+	}
 }// on/off time?
+
+
+// void print_binary(byte *ptr) { // OBSOLETE FUNCTION was used in the past to verify packet content
+// 	byte bitMask = 0x80, counter = 0;
+// 	while(1) {
+// 		if(*ptr & bitMask)	Serial.write('1');
+// 		else 				Serial.write('0');
+
+// 		bitMask >>= 1;
+// 		if(bitMask == 0) {
+// 			bitMask = 0x80;
+// 			ptr++ ;
+// 		}
+// 		counter++;
+// 		if(counter == 14 || counter == 15 || counter == 23 || counter == 24 || counter == 32 || counter == 33 || counter == 41) Serial.write(' ');
+// 		if(counter == 27) Serial.write('.');
+// 		if(counter == 42) {
+// 			Serial.println();
+// 			break;
+// 		}
+// 	}
+// }

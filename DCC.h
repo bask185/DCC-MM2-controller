@@ -1,10 +1,16 @@
 #include <Arduino.h>
 
-enum packetTypes {
-	speedPacket = 1,
-	functionPacket1,
-	functionPacket2,
-	functionPacket3 };
+
+typedef struct trains_ {
+	signed char speed;
+	unsigned char headLight : 1;			
+	unsigned char functions;
+	unsigned char decoderType;
+} Train;
+//extern Trains train[];  TRAINS ARE NOW LOCAL TO DCC.c
+
+extern Train getTrain( uint8_t );
+
 
 enum decoderTypes {
 	MM2,
@@ -14,8 +20,13 @@ enum decoderTypes {
 	EMPTY_SLOT = 255};
 
 extern byte debug;
-extern unsigned char packetType, newInstructionFlag;
-extern int selectedAddres, currentAddres;
+extern uint8_t selectedAddress;
+
+extern void setSpeed( uint8_t , uint8_t );
+extern void setHeadlight( uint8_t , uint8_t );
+extern void setFunctions( uint8_t , uint8_t );
+
+// CONTROL FUNCTIONS
 
 /***** CONSTANTS *****/
 #define DCC_ZERO_BIT 1855
